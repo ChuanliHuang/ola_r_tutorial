@@ -5,7 +5,7 @@ output: html_notebook
 
 ## Why we use R
 ### Pros
-* The code is reproducible and can be made automated
+* The code is reproducible andgetwd can be made automated
 * Can easily revert to previous versions if you change your mind when you use version control
 * In R notebooks, you can keep your notes, code and output in one place and saves it as pdf or html
 * It can do way more than Excel (advanced plots and stats) and you don't make copying mistakes
