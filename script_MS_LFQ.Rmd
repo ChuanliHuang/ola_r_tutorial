@@ -189,49 +189,51 @@ W: Load the data and change annotation so gene names are shown. This bit of code
 ```{r}
 allORFs<-read.delim("all_yeast_ORFs.csv", sep = ',')
 allORFs.idcols <- c("symbol", "xname")
-data_withB3 <- read.table("AP_Expt3_proteinGroups_all.txt", header = TRUE, sep = "\t") 
-data_withB3 <- data_withB3[data_withB3$Reverse != "+" & data_withB3$Potential.contaminant != "+" 
-             &data_withB3$Only.identified.by.site !="+",]
-data_withB3$Protein.IDs <- gsub("_SK1", "", data_withB3$Protein.IDs)
+data <- read.table("Anu_data.txt", header = TRUE, sep = "\t", fill=TRUE)
+data <- data[data$Reverse != "+" & data$Potential.contaminant != "+" 
+             &data$Only.identified.by.site !="+",]
+data$Protein.IDs <- gsub("_SK1", "", data$Protein.IDs)
 
-data_withB3[,allORFs.idcols] <- allORFs[match(data_withB3$Protein.IDs, allORFs$input),allORFs.idcols]
-names(data_withB3)
+data[,allORFs.idcols] <- allORFs[match(data$Protein.IDs, allORFs$input),allORFs.idcols]
+names(data)
 ```
 Replace the symbol column name. This is because DEP package requires a column called Gene.names as MaxQuant output. Somehow data from JR lab does not contain this column.
 
 ```{r}
-new_nameB3<-"Gene.names"
-colnames_p_B3<-names(data_withB3)
-colnames_p_B3[171]<-new_nameB3 #this has to be done manually. For every dataset this number is different. You want to replace the 'symbol' column name. In my case this is column 155
-names(data_withB3)<-colnames_p_B3
+new_name<-"Gene.names"
+colnames<-names(data)
+colnames[97]<-new_name #this has to be done manually. For every dataset this number is different. You want to replace the 'symbol' column name. In my case this is column 97
+names(data)<-colnames
 ```
-Remove duplicated columns.
+Remove duplicated genes
 
 ```{r}
 #are there any duplicated genes?
-data_withB3$Gene.names %>% duplicated() %>% any()
+data$Gene.names %>% duplicated() %>% any()
 #how many?
-data_withB3 %>% group_by(Gene.names) %>% summarize(frequency = n()) %>% 
+data %>% group_by(Gene.names) %>% summarize(frequency = n()) %>% 
   arrange(desc(frequency)) %>% filter(frequency > 1)
 #make unique
-data_unique_B3 <- make_unique(data_withB3, "Gene.names", "Protein.IDs", delim = ";")
-data_withB3$name %>% duplicated() %>% any()
-data_unique_B3$name<- make.names(data_unique_B3$name, unique=TRUE)
+data_unique <- make_unique(data, "Gene.names", "Protein.IDs", delim = ";")
+data$name %>% duplicated() %>% any()
+data_unique$name<- make.names(data_unique$name, unique=TRUE)
 ```
 
 Add experimental design (a file explaining which sample belongs to which condition etc)
 
+#####stopped here######
+
 ```{r}
-exp_design_withB3 <- read.csv("Dsn1_ExpDesign.csv")
-exp_design_withB3$label<-as.character(exp_design_withB3$label)
-exp_design_withB3$condition<-as.character(exp_design_withB3$condition)
-exp_design_withB3$replicate<-as.numeric(exp_design_withB3$replicate)
+exp_design <- read.csv("Dsn1_ExpDesign.csv")
+exp_design$label<-as.character(exp_design$label)
+exp_design$condition<-as.character(exp_design$condition)
+exp_design$replicate<-as.numeric(exp_design$replicate)
 ```
 now generate unique identifiers
 ```{r}
-LFQ_columns_withB3 <- grep("LFQ.", colnames(data_unique_B3))
-data_se_withB3 <- make_se(data_unique_B3, LFQ_columns_withB3, exp_design_withB3) #this doesn't work--works if expdesign correct
-data_se_parsed_withB3 <- make_se_parse(data_unique_B3, LFQ_columns_withB3) #this works even when expdesign not correct
+LFQ_columns <- grep("LFQ.", colnames(data_unique))
+data_se <- make_se(data_unique, LFQ_columns, exp_design) #this doesn't work--works if expdesign correct
+data_se_parsed <- make_se_parse(data_unique, LFQ_columns) #this works even when expdesign not correct
 ```
 
 
@@ -656,7 +658,7 @@ htmlwidgets::saveWidget(lfq_scatterplot_plotly, "AP_Expt3_all_lfq scatterplot.ht
 
 ```{r}
 #change names, I am missing some stuff
-save(allORFs, data, data_diff, data_diff_control, data_filt, data_filt_B3, data_filt_parsed_B3, data_se, data_norm, data_imp, data_se_parsed, data_se_parsed_withB3, data_se_withB3, data_unique, data_unique_B3, data_withB3, dep, dep_control,  dep_relaxed, DETdata, df_wide, exp_design, matrix, 
+save(allORFs, data, data_diff, data_diff_control, data_filt, data_filt_B3, data_filt_parsed_B3, data_se, data_norm, data_imp, data_se_parsed, data_se_parsed, data_se, data_unique, data_unique, data, dep, dep_control,  dep_relaxed, DETdata, df_wide, exp_design, matrix, 
      file = "data_LFQ_Dsn1.RData")
 #load("data_LFQ_Dsn1.RData")
 ```
