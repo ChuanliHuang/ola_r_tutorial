@@ -1,0 +1,662 @@
+---
+title: "Exptn_name"
+output: html_notebook
+---
+#Define path here
+New versions of of R Notebook understand setwd() only when you run an entire chunk and only when you are within that chunk, so we use this bit of code instead
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "C:/Users/s1584495/Desktop/R mess/Expt3_Dsn1_phospho_normalisation/motif analysis")
+```
+
+Lots of bits of code here comes directly from vignette of the DEP package that I use to analyse the data
+First, load required packackes. 
+
+```{r}
+library("DEP")
+library("plotly")
+library("tidyverse")
+```
+
+#Additional functions
+O: Wera used them, but I rarely do. These are more or less the same as in the standard package
+W: Add functions that might be useful. I did not write this function. I got it from the author of DEP package 
+
+```{r}
+get_kmeans_matrix <- function(dep, type = c("contrast", "centered"), kmeans = TRUE, k = 6) {
+  # Show error if inputs are not the required classes
+  if(is.integer(k)) k <- as.numeric(k)
+  assertthat::assert_that(inherits(dep, "SummarizedExperiment"),
+                          is.character(type),
+                          is.logical(kmeans),
+                          is.numeric(k),
+                          length(k) == 1)
+  
+  # Show error if inputs do not contain required columns
+  type <- match.arg(type)
+  
+  # Extract row and col data
+  row_data <- rowData(dep)
+  col_data <- colData(dep) %>%
+    as.data.frame()
+  
+  # Show error if inputs do not contain required columns
+  if(any(!c("label", "condition", "replicate") %in% colnames(col_data))) {
+    stop(paste0("'label', 'condition' and/or 'replicate' columns are not present in '",
+                deparse(substitute(dep)), "'"),
+         call. = FALSE)
+  }
+  if(length(grep("_diff", colnames(row_data))) < 1) {
+    stop(paste0("'[contrast]_diff' columns are not present in '",
+                deparse(substitute(dep)),
+                "'.\nRun test_diff() to obtain the required columns."),
+         call. = FALSE)
+  }
+  if(!"significant" %in% colnames(row_data)) {
+    stop(paste0("'significant' column is not present in '",
+                deparse(substitute(dep)),
+                "'.\nRun add_rejections() to obtain the required column."),
+         call. = FALSE)
+  }
+  
+  # Filter for significant proteins only
+  filtered <- dep[row_data$significant, ]
+  
+  # Check for missing values
+  if(any(is.na(assay(filtered)))) {
+    stop("Cannot perform kmeans clustering with missing values")
+  }
+  
+  # Get centered intensity values ('centered')
+  if(type == "centered") {
+    rowData(filtered)$mean <- rowMeans(assay(filtered), na.rm = TRUE)
+    df <- assay(filtered) - rowData(filtered)$mean
+  }
+  # Get contrast fold changes ('contrast')
+  if(type == "contrast") {
+    df <- rowData(filtered) %>%
+      data.frame() %>%
+      column_to_rownames(var = "name") %>%
+      select(ends_with("_diff"))
+    colnames(df) <-
+      gsub("_diff", "", colnames(df)) %>%
+      gsub("_vs_", " vs ", .)
+  }
+  
+  # Facultative kmeans clustering
+  if(kmeans) {
+    set.seed(1)
+    df_kmeans <- kmeans(df, k)
+    if(type == "centered") {
+      # Order the k-means clusters according to the maximum fold change
+      # in all samples averaged over the proteins in the cluster
+      order <- data.frame(df) %>%
+        cbind(., cluster = df_kmeans$cluster) %>%
+        mutate(row = apply(.[, 1:(ncol(.) - 1)], 1, function(x) max(x))) %>%
+        group_by(cluster) %>%
+        summarize(index = sum(row)/n()) %>%
+        arrange(desc(index)) %>%
+        pull(cluster) %>%
+        match(seq(1:k), .)
+      df_kmeans$cluster <- order[df_kmeans$cluster]
+      matrix <- cbind(df, k = df_kmeans$cluster)
+    }
+    if(type == "contrast") {
+      # Order the k-means clusters according to their average fold change
+      order <- cbind(df, cluster = df_kmeans$cluster) %>%
+        gather(condition, diff, -cluster) %>%
+        group_by(cluster) %>%
+        summarize(row = mean(diff)) %>%
+        arrange(desc(row)) %>%
+        pull(cluster) %>%
+        match(seq(1:k), .)
+      df_kmeans$cluster <- order[df_kmeans$cluster]
+      matrix <- cbind(df, df_kmeans$cluster)
+    }
+  }
+  
+  return(matrix)
+}
+
+plot_heatmap_from_matrix <- function(matrix, col_limit = 6,
+                                     clustering_distance = c("euclidean", "maximum", "manhattan", "canberra",
+                                                             "binary", "minkowski", "pearson", "spearman", "kendall"),
+                                     row_font_size = 6, col_font_size = 10, ...){
+  
+  if(is.integer(col_limit)) col_limit <- as.numeric(col_limit)
+  if(is.integer(row_font_size)) row_font_size <- as.numeric(row_font_size)
+  if(is.integer(col_font_size)) col_font_size <- as.numeric(col_font_size)
+  
+  assertthat::assert_that(is.matrix(matrix),
+                          is.numeric(col_limit),
+                          length(col_limit) == 1,
+                          is.numeric(row_font_size),
+                          length(row_font_size) == 1,
+                          is.numeric(col_font_size),
+                          length(col_font_size) == 1)
+  
+  clustering_distance <- match.arg(clustering_distance)
+  
+  if("k" %in% colnames(matrix)) {
+    kmeans <- TRUE
+    col <- match("k", colnames(matrix))
+    df <- matrix[,-col]
+    df_kmeans <- matrix[,col]
+  } else {
+    kmean <- FALSE
+    df <- matrix
+  }
+  
+  if(ncol(df) == 1) {
+    col_clust = FALSE
+  } else {
+    col_clust = TRUE
+  }
+  if(nrow(df) == 1) {
+    row_clust = FALSE
+  } else {
+    row_clust = TRUE
+  }
+  
+  # Heatmap
+  ht1 = Heatmap(df,
+                col = circlize::colorRamp2(
+                  seq(-col_limit, col_limit, (col_limit/5)),
+                  rev(RColorBrewer::brewer.pal(11, "RdBu"))),
+                split = if(kmeans) {df_kmeans} else {NULL},
+                cluster_rows = col_clust,
+                cluster_columns = row_clust,
+                row_names_side = "left",
+                column_names_side = "top",
+                clustering_distance_rows = clustering_distance,
+                clustering_distance_columns = clustering_distance,
+                heatmap_legend_param = list(color_bar = "continuous",
+                                            legend_direction = "horizontal",
+                                            legend_width = unit(5, "cm"),
+                                            title_position = "lefttop"),
+                name = "log2",
+                row_names_gp = gpar(fontsize = row_font_size),
+                column_names_gp = gpar(fontsize = col_font_size),
+                ...)
+  # Plot
+  draw(ht1, heatmap_legend_side = "top")
+}
+```
+
+
+W: Load the data and change annotation so gene names are shown. This bit of code is here because Data from Christos does not have gene names in it, just fasta headers. So i cross refernce these to an excel file (all_east_ORFs.csv) with gene names
+
+```{r}
+allORFs<-read.delim("all_yeast_ORFs.csv", sep = ',')
+allORFs.idcols <- c("symbol", "xname")
+data_withB3 <- read.table("AP_Expt3_proteinGroups_all.txt", header = TRUE, sep = "\t") 
+data_withB3 <- data_withB3[data_withB3$Reverse != "+" & data_withB3$Potential.contaminant != "+" 
+             &data_withB3$Only.identified.by.site !="+",]
+data_withB3$Protein.IDs <- gsub("_SK1", "", data_withB3$Protein.IDs)
+
+data_withB3[,allORFs.idcols] <- allORFs[match(data_withB3$Protein.IDs, allORFs$input),allORFs.idcols]
+names(data_withB3)
+```
+Replace the symbol column name. This is because DEP package requires a column called Gene.names as MaxQuant output. Somehow data from JR lab does not contain this column.
+
+```{r}
+new_nameB3<-"Gene.names"
+colnames_p_B3<-names(data_withB3)
+colnames_p_B3[171]<-new_nameB3 #this has to be done manually. For every dataset this number is different. You want to replace the 'symbol' column name. In my case this is column 155
+names(data_withB3)<-colnames_p_B3
+```
+Remove duplicated columns.
+
+```{r}
+#are there any duplicated genes?
+data_withB3$Gene.names %>% duplicated() %>% any()
+#how many?
+data_withB3 %>% group_by(Gene.names) %>% summarize(frequency = n()) %>% 
+  arrange(desc(frequency)) %>% filter(frequency > 1)
+#make unique
+data_unique_B3 <- make_unique(data_withB3, "Gene.names", "Protein.IDs", delim = ";")
+data_withB3$name %>% duplicated() %>% any()
+data_unique_B3$name<- make.names(data_unique_B3$name, unique=TRUE)
+```
+
+Add experimental design (a file explaining which sample belongs to which condition etc)
+
+```{r}
+exp_design_withB3 <- read.csv("Dsn1_ExpDesign.csv")
+exp_design_withB3$label<-as.character(exp_design_withB3$label)
+exp_design_withB3$condition<-as.character(exp_design_withB3$condition)
+exp_design_withB3$replicate<-as.numeric(exp_design_withB3$replicate)
+```
+now generate unique identifiers
+```{r}
+LFQ_columns_withB3 <- grep("LFQ.", colnames(data_unique_B3))
+data_se_withB3 <- make_se(data_unique_B3, LFQ_columns_withB3, exp_design_withB3) #this doesn't work--works if expdesign correct
+data_se_parsed_withB3 <- make_se_parse(data_unique_B3, LFQ_columns_withB3) #this works even when expdesign not correct
+```
+
+
+```{r}
+plot_frequency(data_se_parsed)
+
+#these 3 lines of code save a pdf file with my plot
+pdf("Expt3_Dsn1_plot_frequency_data_se_parsed.pdf", width=8, height=5, pointsize=1)
+plot_frequency(data_se_parsed)
+dev.off()
+
+#these 3 lines of code save a pdf file with my plot
+pdf("Expt3_Dsn1_plot_frequency_data_se.pdf", width=8, height=5, pointsize=1)
+plot_frequency(data_se)
+dev.off()
+
+data_filt <- filter_missval(data_se, thr = 0)
+plot_numbers(data_filt)
+
+
+pdf("Expt3_Dsn1_plot_numbers_data_filt.pdf", width=8, height=5, pointsize=1)
+plot_numbers(data_filt)
+dev.off()
+
+plot_coverage(data_filt)
+
+pdf("Expt3_Dsn1_plot_coverage_data_filt.pdf", width=8, height=5, pointsize=1)
+plot_coverage(data_filt)
+dev.off()
+
+data_norm <- normalize_vsn(data_filt)
+plot_normalization(data_filt, data_norm)
+
+pdf("Expt3_Dsn1_plot_normalization.pdf", width=8, height=5, pointsize=1)
+plot_normalization(data_filt, data_norm)
+dev.off()
+
+plot_missval(data_filt)
+
+pdf("Expt3_Dsn1_plot_missval_data_filt.pdf", width=8, height=5, pointsize=1)
+plot_missval(data_filt)
+dev.off()
+
+plot_detect(data_filt)
+
+pdf("Expt3_Dsn1_plot_detect_data_filt.pdf", width=8, height=5, pointsize=1)
+plot_detect(data_filt)
+dev.off()
+
+data_imp <- impute(data_norm, fun = "MinProb")
+
+plot_imputation(data_norm, data_imp)
+
+pdf("Expt3_Dsn1_plot_imputation.pdf", width=8, height=5, pointsize=1)
+plot_imputation(data_norm, data_imp)
+dev.off()
+```
+Now set threshould for what's significant
+
+```{r}
+data_diff <- test_diff(data_imp, type = "all")
+data_diff_control <- test_diff(data_imp, type = "control", control = "b_wt")
+dep <- add_rejections(data_diff, alpha = 0.05, lfc = log2(1.5))
+dep_control<-add_rejections(data_diff_control, alpha = 0.05, lfc = log2(1.5))
+dep_relaxed <- add_rejections(data_diff, alpha = 0.15, lfc = log2(1.5))
+```
+
+Some more QC
+
+```{r}
+plot_pca(dep, x = 1, y = 2, n = 50, point_size = 2)
+
+pdf("Expt3_Dsn1_plot_pca_50.pdf", width=8, height=5, pointsize=1)
+plot_pca(dep, x = 1, y = 2, n = 50, point_size = 2)
+dev.off()
+
+plot_cor(dep, significant = TRUE, lower = 0, upper = 1, pal = "Reds")
+
+pdf("Expt3_Dsn1_plot_cor.pdf", width=8, height=5, pointsize=1)
+plot_cor(dep, significant = TRUE, lower = 0, upper = 1, pal = "Reds")
+dev.off()
+
+plot_heatmap(dep, type = "centered", kmeans = TRUE, 
+             k = 6, col_limit = 4, show_row_names = FALSE)
+
+pdf("Expt3_Dsn1_plot_heatmap.pdf", width=8, height=5, pointsize=1)
+plot_heatmap(dep, type = "centered", kmeans = TRUE, 
+             k = 6, col_limit = 4, show_row_names = FALSE)
+dev.off()
+
+
+matrix <- get_kmeans_matrix(dep, type = "centered", kmeans = TRUE, k=6)
+write.csv(matrix, file="EExpt3_Dsn1_matrix k6.csv")
+
+plot_heatmap_from_matrix(matrix, show_row_names = F)
+
+pdf("Expt3_Dsn1_plot_heatmap_from_matrix.pdf", width=8, height=5, pointsize=1)
+plot_heatmap_from_matrix(matrix, show_row_names = F)
+dev.off()
+
+
+plot_heatmap(dep, type = "centered", kmeans = TRUE, 
+             k = 6, col_limit = 4, show_row_names = T)
+```
+Let's do the same analysis for dep_relaxed
+
+```{r}
+plot_pca(dep_relaxed, x = 1, y = 2, n = 50, point_size = 2)
+
+pdf("Expt3_Dsn1_plot_pca_50 dep_relaxed.pdf", width=8, height=5, pointsize=1)
+plot_pca(dep_relaxed, x = 1, y = 2, n = 50, point_size = 2)
+dev.off()
+
+plot_cor(dep_relaxed, significant = TRUE, lower = 0, upper = 1, pal = "Reds")
+
+pdf("Expt3_Dsn1_plot_cor dep_relaxed.pdf", width=8, height=5, pointsize=1)
+plot_cor(dep_relaxed, significant = TRUE, lower = 0, upper = 1, pal = "Reds")
+dev.off()
+
+plot_heatmap(dep_relaxed, type = "centered", kmeans = TRUE, 
+             k = 6, col_limit = 4, show_row_names = FALSE)
+
+pdf("Expt3_Dsn1_plot_heatmap dep_relaxed.pdf", width=8, height=5, pointsize=1)
+plot_heatmap(dep_relaxed, type = "centered", kmeans = TRUE, 
+             k = 6, col_limit = 4, show_row_names = FALSE)
+dev.off()
+
+
+matrix <- get_kmeans_matrix(dep_relaxed, type = "centered", kmeans = TRUE, k=6)
+write.csv(matrix, file="Expt3_Dsn1_matrix k6 dep_relaxed.csv")
+
+plot_heatmap_from_matrix(matrix, show_row_names = F)
+
+pdf("Expt3_Dsn1_plot_heatmap_from_matrix dep_relaxed.pdf", width=8, height=5, pointsize=1)
+plot_heatmap_from_matrix(matrix, show_row_names = F)
+dev.off()
+```
+
+#Groups of proteins
+This list is incomplete, you need to define groups that you want to use depending on your data
+```{r}
+PP2A <- c("RTS1", "PPH21","PPH22", "CDC55", "TPD3")
+recomb<- c("SPO11","RED1","HOP1","DMC1","FOB1","HFM1","MSH2","MSH3","MSH4","MSH5","MLH1",
+           "MLH3","NDJ1","PCH2","SPO16","ZIP2","ZIP4","RAD51", "ZIP1")
+CPC <- c("IPL1","SLI15","BIR1", "NBL1")
+SGO1 <- "SGO1"
+coh_loader<-c("SCC2","SCC4")
+condensin <- c("SMC2","SMC4","YCS4", "BRN1","YCG1","YLR086W")
+cohesin <- c("SMC1","SMC3","REC8","PDS5","IRR1","RAD61")
+monopolin <- c("CSM1","LRS4","HRR25", "MAM1","YPL204W")
+KT<-c("NDC80","NNF1","MCM22","ASK1","MIF2","SPC34","DA2",
+      "NKP2","CFT3","SPC24","CEP3","NUF2","SLK19","CTF19","NSL1","MCM16","DUO1","SPC105",
+      "NKP1","MTW1","IML3","AME1","SPC19","CHL4","MCM21","SKP1","KRE28","SPC25","CNN1",
+      "DAM1","CBF2","OKP1","DSN1")
+histones<-c("HTA1", "HTA2", "HTB1", "HTB2", "HHT1", "HHT2", "HHF1", "HHF2", "HHO1", "CSE4","YBR010W", "YDR225W","YDR224C", "YNL030W")
+meiosis <- c("SPO13", "SPO11", "ZIP1","RED1","HOP1","DMC1","FOB1","HFM1","MSH2","MSH3","MSH4","MSH5","MLH1",
+           "MLH3","NDJ1","PCH2","SPO16","ZIP2","ZIP4","RAD51", "PFS1")
+inKT <- c("CBF2","CNN1", "WIP1", "MIF2", "MCM16", "CTF3", "MCM22", "IML3", "CHL4", "MHF1", "MHF2", "MCM21", "AME1", "CTF19", "OKP1", "CEP3", "NKP1", "CTF13", "NKP2" )
+outKT <- c("SPC105", "YDR532", "DSN1", "MTW1", "NSL1", "PNF1", "NDC80", "NUF2", "SPC24", "SPC25", "KRE28", "NNF1", "SPC34", "DUO1", "DAM1")
+error <- c("IPL1", "BIR1", "MPS1", "BUB3", "BUB1", "SLI15","NBL1")
+
+```
+
+now, let's plot the interesting ones (reusing old sets so there may be irrelevant ones but whatever so far)
+```{r}
+#this are colors I once used, this is probably not relevant
+#plot_style <- scale_fill_manual(values=c("#b2b2b2")) + scale_color_manual(values=c("#7570B3", "#E6AB02", "#E7298A"))
+# ("#b2b2b2", "#7570B3","#E6AB02", "#D95F02", "#E7298A", "#66A61E"))
+
+
+plot_single(dep, proteins = monopolin, type = "centered")
+
+plot_single(dep, proteins=c("SPO13", "CDC5", "HRR25", "LRS4", "MAM1", "CSM1"), type="centered")
+plot_single(dep, proteins=c("SPC105", "BUB1", "MPS1", "IPL1"), type="centered")
+plot_single(dep, proteins=c("SPC105", "BUB1", "MPS1", "IPL1"))
+
+
+pdf("Ipl1_Msp1_abundance.pdf")
+plot_single(dep, proteins=c( "MPS1", "IPL1"), type="centered")
+dev.off()
+
+```
+
+```{r}
+df_wide <- get_df_wide(data_diff)
+write.csv(df_wide, file="AP_expt3_Dsn1_df_wide.csv")
+DETdata<- df_wide
+#generate a column that will say if a protein belongs to any of the categories
+DETdata <- DETdata %>% 
+  mutate(Function= 
+                  ifelse(name %in%  kinetochore, "kinetochore",
+                  ifelse(name %in%  kinases, "kinases",
+                  ifelse(name %in%  error.correction, "CPC or SAC",
+                  ifelse(name %in%  FIN1, "FIN1",
+                            ifelse (1,"a"))))))
+
+#make this new column as factor, because it will be easier to add aesthetics
+DETdata$Function <- as.factor (DETdata$Function)
+names(DETdata)
+```
+```{r}
+get_plotly_volcano <- function(DETdata,contrast,filename.pdf,filename.html) {
+  #find relevant columns
+  contrast_cols<-grep(contrast,names(DETdata),value=T)
+  #subset the dataset to have the contrast cols, Function, and name
+  contrast_cols<-grep(contrast,names(DETdata),value=T)
+name_cols<-c("Function","name","Protein.IDs")
+to_plot_cols<-c(name_cols,contrast_cols)
+#this object has just the necessary columns
+to_plot<-DETdata[,to_plot_cols]
+#this will be x and y of the plot
+x<-to_plot[,grep("diff",names(to_plot),value=T)]
+y<-to_plot[,grep("p.val",names(to_plot),value=T)]
+
+to_plot<-cbind(to_plot,x,y)
+
+contrast_volcano<-ggplot(DETdata, aes(x = x, y = -log10(y))) + 
+  geom_point(aes(colour=Function, text=name, text2=Protein.IDs),alpha=0.9) +
+  geom_hline(yintercept = -log10(0.05), alpha = 0.2, linetype="dashed") + 
+  geom_vline(xintercept = -2, alpha = 0.2, linetype="dotted") + 
+  geom_vline(xintercept = 2, alpha = 0.2, linetype="dotted") +
+  scale_colour_manual(name="Protein",values=c("#b2b2b2", "#7570B3","#E6AB02", "#D95F02", "#E7298A", "#66A61E", "#1b1f1c", "#a34ad4")) +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 8)) +
+  theme_classic() +
+  labs(title = contrast) +
+  xlab("log2(fold change)") +
+  ylab("-log10(p value)")
+
+#print this file to the console and save as pdf
+print(contrast_volcano)
+
+pdf(filename.pdf, width=8, height=5, pointsize=1) 
+print(contrast_volcano)
+dev.off()
+
+#now make it an interactive html file. Plotly package makes interactive plots. htmlwidgets allow you to save your plot as html, so it can be opened and interacted with in a browser
+
+contrast_volcano_plotly<-ggplotly(contrast_volcano)
+contrast_volcano_plotly
+htmlwidgets::saveWidget(contrast_volcano_plotly, filename.html)
+}
+```
+now generate all possible contrasts #check the list above for contrast, works a bit differently than the old script
+```{r}
+get_plotly_volcano(DETdata = DETdata,contrast = "a_no_tag_vs_b_wt", filename.pdf = "no_tag_vs_wt.pdf",filename.html = "no_tag_vs_wt.html")
+get_plotly_volcano(DETdata = DETdata,contrast = "b_wt_vs_c_spo13d", filename.pdf = "wt_vs_spo13d.pdf",filename.html = "wt_vs_spo13d.html")
+get_plotly_volcano(DETdata = DETdata,contrast = "b_wt_vs_d_spo13d_Cdc5kt", filename.pdf = "wt_vs_spo13d_Cdc5kt.pdf",filename.html = "wt_vs_spo13d_Cdc5kt.html")
+get_plotly_volcano(DETdata = DETdata,contrast = "c_spo13d_vs_d_spo13d_Cdc5kt", filename.pdf = "spo13d_vs_spo13d_Cdc5kt.pdf",filename.html = "spo13d_vs_spo13d_Cdc5kt.html")
+get_plotly_volcano(DETdata = DETdata,contrast = "b_wt_vs_e_Cdc5kt", filename.pdf = "wt_vs_cdc5kt.pdf",filename.html = "wt_vs_Cdc5kt.html")
+
+get_plotly_volcano(DETdata = DETdata,contrast = "c_spo13d_vs_e_Cdc5kt", filename.pdf = "spo13d_vs_cdc5kt.pdf",filename.html = "spo13d_vs_Cdc5kt.html")
+get_plotly_volcano(DETdata = DETdata,contrast = "c_spo13d_vs_d_spo13d_Cdc5kt", filename.pdf = "spo13d_vs_spo13d_cdc5kt.pdf",filename.html = "spo13d_vs_spo13d_Cdc5kt.html")
+get_plotly_volcano(DETdata = DETdata,contrast = "d_spo13d_Cdc5kt_vs_e_Cdc5kt", filename.pdf = "spo13d_cdc5kt_vs_cdc5kt.pdf",filename.html = "spo13d_cdc5kt_vs_cdc5kt.html")
+```
+I also want to plot lfq intensity vs fold change - just wt vs x.wt. plots like in Xun Bao paper from Sawin lab. I will use the data from above - average signal as well as fold changeis there. I will test no tag vs wt, wt vs spo13d, wt vs Cdc5-kt, and wt vs. spo13d Cdc5-kt
+
+first I need to take intensity values and unlog them ;]
+
+```{r}
+#df_wide0 refers to AP_expt3_Dsn1_df_wide0 in the same folder. I already have it in the environment
+names(df_wide0)
+head(df_wide0)
+complex.data<-df_wide0[,1:17]
+names(complex.data)
+#the data I already have here is logarithmed, so I have to unlog it, and then sum it up, as i have not found a way to perform this operation already on logarithms 
+unlogged<-2^complex.data[,2:17]
+unlogged<-cbind(complex.data$name,unlogged)
+names(unlogged)<-names(complex.data)
+head(unlogged)
+class(unlogged)
+new_rownames<-unlogged$name
+row.names(unlogged)<-new_rownames
+```
+all stuff below is much much less refined, because I was writing it in a hurry, so rather than write elegant code or some kind of a funcion, i was just writing whatever gets me to the result
+```{r}
+colnames(df_wide0)
+#these columns have fold diff and p vaue
+for.lfq.plot<-df_wide0[,c(1,45,47,65,67,70,72,75,77)]
+names(for.lfq.plot)
+#these have intensity
+for.lfq.plot<-cbind(for.lfq.plot,unlogged[,c(2:17)])
+colnames(for.lfq.plot)
+#this calculates average intensity per condition
+for.lfq.plot$avg.not<-rowMeans(for.lfq.plot[,c(10:12)])
+for.lfq.plot$avg.wt<-rowMeans(for.lfq.plot[,c(13:16)])
+for.lfq.plot$avg.spo13d<-rowMeans(for.lfq.plot[,c(17:19)])
+for.lfq.plot$avg.spo13d_cdc5kt<-rowMeans(for.lfq.plot[,c(20:22)])
+for.lfq.plot$avg.cdc5kt<-rowMeans(for.lfq.plot[,c(23:25)])
+colnames(for.lfq.plot)
+#this asum of conditions
+for.lfq.plot$sum.not.wt<-rowSums(for.lfq.plot[,c(26,27)])
+for.lfq.plot$sum.wt.spo13d<-rowSums(for.lfq.plot[,c(27,28)])
+for.lfq.plot$sum.wt.spo13d_cdc5kt<-rowSums(for.lfq.plot[,c(27,29)])
+for.lfq.plot$sum.wt.cdc5kt<-rowSums(for.lfq.plot[,c(27,30)])
+
+colnames(for.lfq.plot)
+write.csv(for.lfq.plot,"sum_of_intensities.csv")
+```
+
+```{r}
+#this isolates only what is needed for the volcano
+filtered.not.wt<-for.lfq.plot[,c(1,2,3,31)]
+filtered.wt.spo13d<-for.lfq.plot[,c(1,4,5,32)]
+filtered.wt.spo13d_cdc5kt<-for.lfq.plot[,c(1,6,7,33)]
+filtered.wt.cdc5kt<-for.lfq.plot[,c(1,8,9,34)]
+```
+
+```{r}
+filtered.not.wt<- filtered.not.wt %>% 
+  mutate(pval= ifelse(filtered.not.wt$a_no_tag_vs_b_wt_p.val < 0.0001, "<0.0001",
+              ifelse(filtered.not.wt$a_no_tag_vs_b_wt_p.val < 0.001, "<0.001",
+               ifelse(filtered.not.wt$a_no_tag_vs_b_wt_p.val < 0.01, "<0.01",  
+               ifelse(filtered.not.wt$a_no_tag_vs_b_wt_p.val < 0.05, "<0.05",
+                      ifelse (1,"other"))))))
+
+filtered.wt.spo13d<- filtered.wt.spo13d %>% 
+  mutate(pval= ifelse(filtered.wt.spo13d$b_wt_vs_c_spo13d_p.val < 0.0001, "<0.0001",
+              ifelse(filtered.wt.spo13d$b_wt_vs_c_spo13d_p.val < 0.001, "<0.001",
+               ifelse(filtered.wt.spo13d$b_wt_vs_c_spo13d_p.val < 0.01, "<0.01",  
+               ifelse(filtered.wt.spo13d$b_wt_vs_c_spo13d_p.val < 0.05, "<0.05",
+                      ifelse (1,"other"))))))
+
+filtered.wt.spo13d_cdc5kt<- filtered.wt.spo13d_cdc5kt %>% 
+  mutate(pval= ifelse(filtered.wt.spo13d_cdc5kt$b_wt_vs_d_spo13d_Cdc5kt_p.val < 0.0001, "<0.0001",
+              ifelse(filtered.wt.spo13d_cdc5kt$b_wt_vs_d_spo13d_Cdc5kt_p.val < 0.001, "<0.001",
+               ifelse(filtered.wt.spo13d_cdc5kt$b_wt_vs_d_spo13d_Cdc5kt_p.val < 0.01, "<0.01",  
+               ifelse(filtered.wt.spo13d_cdc5kt$b_wt_vs_d_spo13d_Cdc5kt_p.val < 0.05, "<0.05",
+                      ifelse (1,"other"))))))
+
+filtered.wt.cdc5kt<- filtered.wt.cdc5kt %>% 
+  mutate(pval= ifelse(filtered.wt.cdc5kt$b_wt_vs_e_Cdc5kt_p.val < 0.0001, "<0.0001",
+              ifelse(filtered.wt.cdc5kt$b_wt_vs_e_Cdc5kt_p.val < 0.001, "<0.001",
+               ifelse(filtered.wt.cdc5kt$b_wt_vs_e_Cdc5kt_p.val < 0.01, "<0.01",  
+               ifelse(filtered.wt.cdc5kt$b_wt_vs_e_Cdc5kt_p.val < 0.05, "<0.05",
+                      ifelse (1,"other"))))))
+
+```
+and I plot
+```{r}
+lfq_volcano.pval.not.wt<-ggplot(filtered.not.wt, aes(x = a_no_tag_vs_b_wt_diff, y = log(sum.not.wt, 10))) + geom_point(aes(colour=pval, text=name),alpha=1) +
+  theme_classic() + coord_cartesian(ylim=c(6,11)) +
+  labs(title = "LFQ intensity vs log2 fold change no tag vs wild type") +
+  xlab("log2 fold change no tag vs wt") +
+  ylab("log10(signal intensity)")
+
+lfq_volcano.pval.not.wt
+
+lfq_volcano.pval.not.wt_plotly<-ggplotly(lfq_volcano.pval.not.wt)
+lfq_volcano.pval.not.wt_plotly
+htmlwidgets::saveWidget(lfq_volcano.pval.not.wt_plotly, "AP_Expt3_Dsn1_notag_VS_wt_lfq_volcano_pval.html")
+###########
+
+lfq_volcano.pval.wt.spo13d<-ggplot(filtered.wt.spo13d, aes(x = b_wt_vs_c_spo13d_diff, y = log(sum.wt.spo13d, 10))) + geom_point(aes(colour=pval, text=name),alpha=1) +
+  theme_classic() + coord_cartesian(ylim=c(6,11)) +
+  labs(title = "LFQ intensity vs log2 fold change wild type vs spo13d") +
+  xlab("log2 fold change wild type vs spo13d") +
+  ylab("log10(signal intensity)")
+
+lfq_volcano.pval.wt.spo13d
+
+lfq_volcano.pval.wt.spo13d_plotly<-ggplotly(lfq_volcano.pval.wt.spo13d)
+lfq_volcano.pval.wt.spo13d_plotly
+htmlwidgets::saveWidget(lfq_volcano.pval.wt.spo13d_plotly, "AP_Expt3_Dsn1_wt_VS_spo13d_lfq_volcano_pval.html")
+
+###########
+
+lfq_volcano.pval.wt.spo13d_cdc5kt<-ggplot(filtered.wt.spo13d_cdc5kt, aes(x = b_wt_vs_d_spo13d_Cdc5kt_diff, y = log(sum.wt.spo13d_cdc5kt, 10))) + geom_point(aes(colour=pval, text=name),alpha=1) +
+  theme_classic() + coord_cartesian(ylim=c(6,11)) +
+  labs(title = "LFQ intensity vs log2 fold change wild type vs spo13d Cdc5kt") +
+  xlab("log2 fold change wild type vs spo13d Cdc5kt") +
+  ylab("log10(signal intensity)")
+
+lfq_volcano.pval.wt.spo13d_cdc5kt
+
+lfq_volcano.pval.wt.spo13d_cdc5kt_plotly<-ggplotly(lfq_volcano.pval.wt.spo13d_cdc5kt)
+lfq_volcano.pval.wt.spo13d_cdc5kt_plotly
+htmlwidgets::saveWidget(lfq_volcano.pval.wt.spo13d_cdc5kt_plotly, "AP_Expt3_Dsn1_wt_VS_spo13d_cdc5kt_lfq_volcano_pval.html")
+
+###########
+
+lfq_volcano.pval.wt.cdc5kt<-ggplot(filtered.wt.cdc5kt, aes(x = b_wt_vs_e_Cdc5kt_diff, y = log(sum.wt.cdc5kt, 10))) + geom_point(aes(colour=pval, text=name),alpha=1) +
+  theme_classic() + coord_cartesian(ylim=c(6,11)) +
+  labs(title = "LFQ intensity vs log2 fold change wild type vs Cdc5kt") +
+  xlab("log2 fold change wt vs Cdc5kt") +
+  ylab("log10(signal intensity)")
+
+lfq_volcano.pval.wt.cdc5kt
+
+lfq_volcano.pval.wt.cdc5kt_plotly<-ggplotly(lfq_volcano.pval.wt.cdc5kt)
+lfq_volcano.pval.wt.cdc5kt_plotly
+htmlwidgets::saveWidget(lfq_volcano.pval.wt.cdc5kt_plotly, "AP_Expt3_Dsn1_wt_VS_cdc5kt_lfq_volcano_pval.html")
+
+```
+
+```{r}
+#install.packages("reshape2")
+library(reshape2)
+filtered2<- for.lfq.plot[,c(1,31:34)]
+filtered2<-melt(filtered2)
+filtered2 <- filtered2 %>% 
+  mutate(Function= 
+                  ifelse(name %in%  kinetochore, "kinetochore",
+                  ifelse(name %in%  kinases, "kinases",
+                  ifelse(name %in%  error.correction, "CPC or SAC",
+                  ifelse(name %in%  FIN1, "FIN1",
+                            ifelse (1,"a"))))))
+  
+lfq_scatterplot<-ggplot(filtered2, aes(colour=Function, x = variable, y =log10(value))) + 
+  geom_point(aes(text=name),alpha=1,position=position_jitter(w=0.4)) +
+  theme_classic() +
+  scale_colour_manual(name="Protein",values=c("#b2b2b2", '#f781bf','#377eb8','#4daf4a','#984ea3','#ff7f00','#ffff33','#e41a1c','#a65628')) +
+  labs(title = "Signal intensity in different mutants in prophase") +
+  xlab("mutants") +
+  ylab("log10(signal intensity)")
+
+lfq_scatterplot
+
+lfq_scatterplot_plotly<-ggplotly(lfq_scatterplot)
+lfq_scatterplot_plotly
+htmlwidgets::saveWidget(lfq_scatterplot_plotly, "AP_Expt3_all_lfq scatterplot.html")
+```
+
+```{r}
+#change names, I am missing some stuff
+save(allORFs, data, data_diff, data_diff_control, data_filt, data_filt_B3, data_filt_parsed_B3, data_se, data_norm, data_imp, data_se_parsed, data_se_parsed_withB3, data_se_withB3, data_unique, data_unique_B3, data_withB3, dep, dep_control,  dep_relaxed, DETdata, df_wide, exp_design, matrix, 
+     file = "data_LFQ_Dsn1.RData")
+#load("data_LFQ_Dsn1.RData")
+```

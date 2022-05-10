@@ -1,0 +1,101 @@
+---
+title: "Brief R introduction for the Marston lab"
+output: html_notebook
+---
+
+## Why we use R
+### Pros
+* The code is reproducible and can be made automated
+* Can easily revert to previous versions if you change your mind when you use version control
+* In R notebooks, you can keep your notes, code and output in one place and saves it as pdf or html
+* It can do way more than Excel (advanced plots and stats) and you don't make copying mistakes
+* Solutions for your problems may already exists (Bioconductor)
+* More flexible than designated stat programs like Graph Pad
+
+### Cons
+* Requires data input in specific format (but this is good, as it forces you to keep data tidy)
+* You need to learn a programming language
+* Mistakes in the code are frustrating and take time to resolve
+
+## Required
+* R. Download from [link](https://cran.r-project.org/). Let it install developer tools, it will need them for running Bioconductor packages
+* R Studio. Download from [link](https://www.rstudio.com/products/rstudio/)
+* R Notebook. In R Studio go to File -> New file -> R Notebook, then follow the instructions
+* _Recommended:_ Create account on [GitHub](https://github.com/) for version control, sharing your code and data. Instructions on how to configure it are [here](https://jennybc.github.io/2014-05-12-ubc/ubc-r/session03_git.html)
+
+## Resources
+__The base R__ 
+
+_This is not my preferred way to use R but sometimes there is no way around_
+
+* [Swirl](https://swirlstats.com/) interactive course to learn R basics. 
+* [List of basic R commands](https://cran.r-project.org/doc/contrib/Short-refcard.pdf)
+* [Basic R textbook](https://cran.r-project.org/doc/contrib/Paradis-rdebuts_en.pdf)
+
+__R with tidyverse__
+
+_Much easier, much cleaner code, much more approachable for a beginner_
+
+The packages that you are most likely to use:
+
+* dplyr for data cleanup
+* stringr to merging/dividing columns based on the pattern
+* tidyr to reshape data
+* ggplot2 to plot data
+
+Useful links
+
+* [Tidyverse textbook](https://r4ds.had.co.nz/introduction.html)
+* [Cheatsheets](https://www.rstudio.com/resources/cheatsheets/) 
+* [GGplot cookbook](http://www.cookbook-r.com/Graphs/) how to plot data with many examples
+
+__Other useful stuff__
+
+* [R bloggers](https://www.r-bloggers.com/) 
+* [R Companion](https://rcompanion.org/rcompanion/a_02.html) how do biostatistic with R
+* [Advanced textbook](https://adv-r.hadley.nz/index.html) if you use the DEP package, take a look on the S4 section
+* [R Studio youtube channel])(https://www.youtube.com/channel/UC3xfbCMLCw1Hh4dWop3XtHg) tutorials and data science seminars
+* [link](https://stackoverflow.com/) one stop place if you have any problems with code. I usually use Google to navigate through the forums
+
+## Recommended packages
+* DEP (Bioconductor) -- LFQ MS analysis
+* tidyverse 
+* ggpubr -- nicer plots, easier to add stats
+* rcolorbrewer -- nicer colors for the plots
+* pwr -- power analysis
+
+
+```{r}
+#Install basic packages (from CRAN)
+install.packages("tidyverse") 
+
+#Install packages from Bioconductor
+if (!requireNamespace("BiocManager", quietly=TRUE))
+    install.packages("BiocManager")
+BiocManager::install("DEP")
+
+#load package
+library(tidyverse)
+
+```
+
+
+## The basics
+This chunk of code (aka, the piece of code that appears in a single gray box) is necessary to tell R Studio where to look for files and where to save the output. This chunk does not show in the html file (this is on purpose to protect your privacy), refer to the .Rmd file to see it
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "C:/Users/s1584495/Desktop/R mess/Expt3_Dsn1_final/PCA_corr_sans_notag")
+```
+
+An alternative is to specify the path by setwd(), but it will only work in the chunk and then revert to default
+```{r}
+setwd("C:/Users/s1584495/Desktop/R mess/Expt3_Dsn1_final/PCA_corr_sans_notag")
+getwd() #this how you can check the path
+test <- 1 #how you create an object (appears on the right)
+test2 <- 2
+rm(test) #remove a specific object
+rm(list=ls()) #remove all object
+```
+
+
+

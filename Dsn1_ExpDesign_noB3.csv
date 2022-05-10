@@ -1,0 +1,17 @@
+label,condition,replicate
+A1,a_no_tag,1
+A2,a_no_tag,2
+A3,a_no_tag,3
+B1,b_wt,1
+B2,b_wt,2
+B4,b_wt,4
+B5,b_wt,5
+C1,c_spo13d,1
+C2,c_spo13d,2
+C3,c_spo13d,3
+D1,d_spo13d_Cdc5kt,1
+D2,d_spo13d_Cdc5kt,2
+D3,d_spo13d_Cdc5kt,3
+E1,e_Cdc5kt,1
+E2,e_Cdc5kt,2
+E3,e_Cdc5kt,3
